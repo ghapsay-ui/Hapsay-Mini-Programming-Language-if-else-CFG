@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 Recursive-Descent Parser for Mini-Language
 ===========================================
@@ -406,3 +405,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
