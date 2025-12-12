@@ -1,0 +1,367 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Recursive-Descent Parser - Mini-Language (Browser)</title>
+<style>
+  :root{
+    --bg:#f8f9fa;
+    --panel:#ffffff;
+    --accent:#2c3e50;
+    --muted:#7f8c8d;
+    --success:#27ae60;
+    --danger:#e74c3c;
+    --blue:#3498db;
+    --output-bg:#ecf0f1;
+    --mono: "Courier New", monospace;
+  }
+  html,body{height:100%;margin:0;background:var(--bg);font-family:Arial, Helvetica, sans-serif}
+  header{background:var(--accent);color:white;padding:12px 18px}
+  header h1{margin:0;font-size:18px}
+  main{padding:18px;max-width:1100px;margin:18px auto}
+  .panel{background:var(--panel);border-radius:6px;box-shadow:0 1px 3px rgba(0,0,0,.06);padding:12px;margin-bottom:12px}
+  label{display:block;margin-bottom:6px;font-weight:700}
+  textarea.code{
+    width:100%;min-height:220px;font-family:var(--mono);font-size:13px;padding:10px;
+    border:1px solid #d0d7de;border-radius:4px;box-sizing:border-box;resize:vertical;
+  }
+  .btnbar{display:flex;gap:8px;margin-bottom:8px}
+  button.btn{
+    border:0;padding:10px 16px;border-radius:6px;color:white;font-weight:700;cursor:pointer;
+  }
+  button.parse{background:var(--success)}
+  button.clear{background:var(--danger)}
+  button.example{background:var(--blue)}
+  .output{
+    width:100%;min-height:140px;max-height:300px;overflow:auto;
+    background:var(--output-bg);padding:10px;border-radius:4px;font-family:var(--mono);
+    white-space:pre-wrap;border:1px solid #d0d7de;
+  }
+  .success-line{color:var(--success);font-weight:700}
+  .error-line{color:var(--danger);font-weight:700}
+  .tokens-line{color:#2d3436}
+  footer{max-width:1100px;margin:6px auto;text-align:center;color:var(--muted);font-size:13px}
+  /* responsive */
+  @media (max-width:640px){
+    header h1{font-size:16px}
+    button.btn{padding:10px 12px}
+  }
+</style>
+</head>
+<body>
+  <header>
+    <h1>Mini-Language Parser (If-Else, Assignments, Sequences)</h1>
+  </header>
+
+  <main>
+    <section class="panel">
+      <label for="inputCode">Input Code:</label>
+      <textarea id="inputCode" class="code" spellcheck="false">
+// Type or paste code here. Example: click "Load Example"
+      </textarea>
+
+      <div class="btnbar">
+        <button id="parseBtn" class="btn parse">Parse &amp; Validate</button>
+        <button id="clearBtn" class="btn clear">Clear</button>
+        <button id="loadExampleBtn" class="btn example">Load Example</button>
+      </div>
+    </section>
+
+    <section class="panel">
+      <label for="output">Output:</label>
+      <div id="output" class="output" aria-live="polite" role="status"></div>
+    </section>
+  </main>
+
+  <footer>Saved conversion of your parser — runs offline in the browser.</footer>
+
+<script>
+/*
+  Tokenizer and Parser ported from the Python code in your PDF.
+  Patterns/order kept to preserve tokenization behavior.
+  Source reference (uploaded PDF). 2
+*/
+
+/* TokenType enum */
+const TokenType = {
+  IF: 'IF', ELSE: 'ELSE',
+  LBRACE: 'LBRACE', RBRACE: 'RBRACE',
+  LPAREN: 'LPAREN', RPAREN: 'RPAREN',
+  ASSIGN: 'ASSIGN', SEMICOLON: 'SEMICOLON',
+  PLUS: 'PLUS', MINUS: 'MINUS',
+  EQ: 'EQ', NEQ: 'NEQ',
+  ID: 'ID', NUM: 'NUM',
+  EOF: 'EOF'
+};
+
+class Token {
+  constructor(type, value, position){
+    this.type = type;
+    this.value = value;
+    this.position = position;
+  }
+  toString(){
+    return `Token(${this.type}, '${this.value}', pos=${this.position})`;
+  }
+}
+
+/* Tokenizer */
+class Tokenizer {
+  constructor(source){
+    this.source = source;
+    this.tokens = [];
+    this.TOKEN_PATTERNS = [
+      ['\\bif\\b', TokenType.IF],
+      ['\\belse\\b', TokenType.ELSE],
+      ['\\{', TokenType.LBRACE],
+      ['\\}', TokenType.RBRACE],
+      ['\\(', TokenType.LPAREN],
+      ['\\)', TokenType.RPAREN],
+      ['==', TokenType.EQ],
+      ['!=', TokenType.NEQ],
+      ['=', TokenType.ASSIGN],
+      [';', TokenType.SEMICOLON],
+      ['\\+', TokenType.PLUS],
+      ['-', TokenType.MINUS],
+      ['[a-zA-Z_][a-zA-Z0-9_]*', TokenType.ID],
+      ['\\d+', TokenType.NUM],
+      ['\\s+', null] // whitespace ignored
+    ];
+    this.tokenize();
+  }
+
+  tokenize(){
+    let pos = 0;
+    const s = this.source;
+    while (pos < s.length){
+      let matched = false;
+      for (let [pattern, ttype] of this.TOKEN_PATTERNS){
+        const re = new RegExp('^' + pattern);
+        const substr = s.slice(pos);
+        const m = re.exec(substr);
+        if (m){
+          const value = m[0];
+          if (ttype){
+            this.tokens.push(new Token(ttype, value, pos));
+          }
+          pos += value.length;
+          matched = true;
+          break;
+        }
+      }
+      if (!matched){
+        throw new SyntaxError(`Illegal character '${s[pos]}' at position ${pos}`);
+      }
+    }
+    this.tokens.push(new Token(TokenType.EOF, '', pos));
+  }
+
+  get_tokens(){ return this.tokens; }
+}
+
+/* Parser: recursive-descent (mirrors Python structure) */
+class Parser {
+  constructor(tokens){
+    this.tokens = tokens;
+    this.current_index = 0;
+    this.current_token = this.tokens[0] || null;
+  }
+
+  advance(){
+    if (this.current_index < this.tokens.length - 1){
+      this.current_index++;
+      this.current_token = this.tokens[this.current_index];
+    }
+  }
+
+  peek(){
+    return this.current_token ? this.current_token.type : TokenType.EOF;
+  }
+
+  match(expectedType){
+    if (this.peek() === expectedType){
+      const token = this.current_token;
+      this.advance();
+      return token;
+    } else {
+      throw new SyntaxError(`Expected ${expectedType} but found ${this.peek()} at position ${this.current_token ? this.current_token.position : 'EOF'}`);
+    }
+  }
+
+  parse_program(){
+    this.parse_stmt_list();
+    if (this.peek() !== TokenType.EOF){
+      throw new SyntaxError(`Unexpected token ${this.peek()} at position ${this.current_token.position}`);
+    }
+  }
+
+  parse_stmt_list(){
+    while (this.peek() !== TokenType.EOF && this.peek() !== TokenType.RBRACE){
+      this.parse_stmt();
+    }
+  }
+
+  parse_stmt(){
+    if (this.peek() === TokenType.IF){
+      this.parse_if_stmt();
+    } else if (this.peek() === TokenType.ID){
+      this.parse_assign();
+    } else if (this.peek() === TokenType.LBRACE){
+      this.parse_block();
+    } else {
+      throw new SyntaxError(`Unexpected statement starting with ${this.peek()} at position ${this.current_token.position}`);
+    }
+  }
+
+  parse_if_stmt(){
+    this.match(TokenType.IF);
+    this.match(TokenType.LPAREN);
+    this.parse_expr();
+    this.match(TokenType.RPAREN);
+    this.match(TokenType.LBRACE);
+    this.parse_stmt_list();
+    this.match(TokenType.RBRACE);
+
+    if (this.peek() === TokenType.ELSE){
+      this.match(TokenType.ELSE);
+      this.match(TokenType.LBRACE);
+      this.parse_stmt_list();
+      this.match(TokenType.RBRACE);
+    }
+  }
+
+  parse_block(){
+    this.match(TokenType.LBRACE);
+    this.parse_stmt_list();
+    this.match(TokenType.RBRACE);
+  }
+
+  parse_assign(){
+    this.match(TokenType.ID);
+    this.match(TokenType.ASSIGN);
+    this.parse_expr();
+    this.match(TokenType.SEMICOLON);
+  }
+
+  parse_expr(){
+    this.parse_term();
+    if ([TokenType.PLUS, TokenType.MINUS, TokenType.EQ, TokenType.NEQ].includes(this.peek())){
+      this.advance();
+      this.parse_term();
+    }
+  }
+
+  parse_term(){
+    if (this.peek() === TokenType.ID){
+      this.match(TokenType.ID);
+    } else if (this.peek() === TokenType.NUM){
+      this.match(TokenType.NUM);
+    } else {
+      throw new SyntaxError(`Expected identifier or number but found ${this.peek()} at position ${this.current_token.position}`);
+    }
+  }
+
+  parse(){
+    try {
+      this.parse_program();
+      return [true, "ACCEPT: Valid syntax"];
+    } catch (e){
+      if (e instanceof SyntaxError){
+        return [false, `REJECT: ${e.message}`];
+      } else {
+        return [false, `REJECT: ${String(e)}`];
+      }
+    }
+  }
+}
+
+/* --- UI wiring --- */
+const inputEl = document.getElementById('inputCode');
+const outputEl = document.getElementById('output');
+const parseBtn = document.getElementById('parseBtn');
+const clearBtn = document.getElementById('clearBtn');
+const loadExampleBtn = document.getElementById('loadExampleBtn');
+
+function printLine(text, cls){
+  const div = document.createElement('div');
+  div.textContent = text;
+  if (cls) div.className = cls;
+  outputEl.appendChild(div);
+}
+
+function clearOutput(){
+  outputEl.innerHTML = '';
+}
+
+function parseInput(){
+  const source = inputEl.value.trim();
+  if (!source){
+    alert('Please enter code to parse.');
+    return;
+  }
+  clearOutput();
+
+  try {
+    // Tokenize
+    const tokenizer = new Tokenizer(source);
+    const tokens = tokenizer.get_tokens();
+
+    printLine('TOKENIZATION:', 'tokens-line');
+    printLine('-'.repeat(70), 'tokens-line');
+    for (const tk of tokens){
+      if (tk.type !== TokenType.EOF){
+        printLine(tk.toString(), 'tokens-line');
+      }
+    }
+
+    printLine('\n' + '='.repeat(70), 'tokens-line');
+    printLine('PARSING RESULT:', 'tokens-line');
+    printLine('='.repeat(70), 'tokens-line');
+
+    const parser = new Parser(tokens);
+    const [success, message] = parser.parse();
+
+    if (success){
+      printLine('✓ ' + message, 'success-line');
+    } else {
+      printLine('✗ ' + message, 'error-line');
+    }
+  } catch (e){
+    printLine(`✗ REJECT: Tokenization error - ${e.message}`, 'error-line');
+  }
+}
+
+function clearAll(){
+  inputEl.value = '';
+  clearOutput();
+}
+
+function loadExample(){
+  const example = `if (a == b) {
+    a = a + 1;
+} else {
+    b = b - 1;
+}`;
+  inputEl.value = example;
+  inputEl.focus();
+}
+
+/* Events */
+parseBtn.addEventListener('click', parseInput);
+clearBtn.addEventListener('click', clearAll);
+loadExampleBtn.addEventListener('click', loadExample);
+
+/* Optional: enable Ctrl+Enter to Parse */
+inputEl.addEventListener('keydown', (ev)=>{
+  if ((ev.ctrlKey || ev.metaKey) && ev.key === 'Enter'){
+    ev.preventDefault();
+    parseInput();
+  }
+});
+
+/* Preload example like the original app */
+loadExample();
+</script>
+</body>
+</html>
